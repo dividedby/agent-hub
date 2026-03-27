@@ -244,7 +244,7 @@ def select_provider(data: Dict, task_type: str) -> Tuple[str, Optional[str]]:
             return fallback, msg
         sys.exit(
             f"[agent-hub] Hard stop: {primary} and {fallback} both exhausted. "
-            f"Reset with: python3 router.py reset {primary}"
+            f"Reset with: python3 router.py reset {primary} && python3 router.py reset {fallback}"
         )
 
     # primary below threshold but not fully exhausted → use fallback preemptively
@@ -444,7 +444,7 @@ def cmd_route(args: argparse.Namespace) -> None:
             warning = f"⚠ {provider.capitalize()} key missing — used {fallback.capitalize()} instead"
             provider = fallback
         except Exception as e2:
-            print(f"[agent-hub] Both {provider} and {fallback} failed: {e2}")
+            print(f"[agent-hub] Both {provider} and {fallback} failed: {e2}", file=sys.stderr)
             sys.exit(1)
     except requests.exceptions.RequestException as e:
         # Network/HTTP error — fallback was already attempted by call_with_retry, try next provider
@@ -454,7 +454,7 @@ def cmd_route(args: argparse.Namespace) -> None:
             warning = f"⚠ {provider.capitalize()} failed — used {fallback.capitalize()} instead"
             provider = fallback
         except Exception as e2:
-            print(f"[agent-hub] Both {provider} and {fallback} failed: {e2}")
+            print(f"[agent-hub] Both {provider} and {fallback} failed: {e2}", file=sys.stderr)
             sys.exit(1)
 
     data = increment_usage(data, provider, increment)
@@ -507,6 +507,7 @@ def cmd_set_key(args: argparse.Namespace) -> None:
 
     existing[env_key] = args.key_value.strip()
     ENV_FILE.write_text("\n".join(f"{k}={v}" for k, v in existing.items()) + "\n")
+    ENV_FILE.chmod(0o600)
     print(f"[agent-hub] Set {env_key} in {ENV_FILE}")
 
 

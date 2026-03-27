@@ -556,3 +556,24 @@ class TestCLIRoute:
 
         out = capsys.readouterr()
         assert "fallback response" in out.out
+
+    def test_route_exits_when_both_providers_fail(self, data_dir, monkeypatch, capsys):
+        data = router._init_usage()
+        (data_dir / "usage.json").write_text(json.dumps(data))
+        (data_dir / ".env").write_text("GROQ_API_KEY=test_key\n")
+
+        import requests as req
+
+        def always_fail(provider, task):
+            raise req.exceptions.RequestException("network error")
+
+        with patch.object(router, "call_with_retry", side_effect=always_fail):
+            args = MagicMock()
+            args.task = "quick question"
+            args.type = "fast"
+            with pytest.raises(SystemExit) as exc_info:
+                router.cmd_route(args)
+
+        assert exc_info.value.code == 1
+        out = capsys.readouterr()
+        assert "failed" in out.err
