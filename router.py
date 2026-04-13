@@ -1,83 +1,137 @@
 #!/usr/bin/env python3
-"""agent-hub router — classify tasks, route to free-tier AI providers, track usage."""
+"""
+agent-hub router (forked) — free-tier AI routing for Claude Code Pro users.
 
-import argparse  # noqa: F401 — used in Task 4 (CLI)
+Goal: keep all Claude usage within your existing Claude Code Pro subscription.
+Every task is routed to the best *free* external provider; Claude acts only
+as the orchestrator (which is covered by your Claude Code Pro plan).
+
+Providers (all free-tier, no CC required):
+  groq-fast     Groq  / Llama 3.1 8B Instant  — 30 RPM, 14 400 RPD, 500K TPD
+  groq-smart    Groq  / Llama 4 Scout 17B      — 30 RPM,  1 000 RPD, 500K TPD
+  groq-creative Groq  / Kimi-K2                — 60 RPM,  1 000 RPD, 300K TPD
+  cerebras      Cerebras / Llama 3.1 8B        — 30 RPM, 14 400 RPD,   1M TPD
+  gemini-flash  Google / Gemini 2.5 Flash      — 10 RPM,    250 RPD, 250K TPM
+  gemini-lite   Google / Gemini 2.5 Flash-Lite — 15 RPM,  1 000 RPD, 250K TPM
+  mistral-code  Mistral / Codestral            —  2 RPM, ~4M tokens/month
+"""
+
+import argparse
 import json
-import os  # noqa: F401 — used in Task 3 (API calls)
-import sys  # noqa: F401 — used in Tasks 2-4
-import time  # noqa: F401 — used in Task 3 (retry)
-from datetime import datetime, timezone, timedelta
+import os
+import sys
+import time
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, Optional, Tuple  # Optional/Tuple: noqa: F401 — used in Tasks 2-4
+from typing import Dict, Optional, Tuple
 
-import requests  # noqa: F401 — used in Task 3 (API calls)
-from dotenv import load_dotenv  # noqa: F401 — used in Task 3 (API calls)
+import requests
+from dotenv import load_dotenv
 
-# ── Paths ──────────────────────────────────────────────────────────────────────
+# -- Paths
 SKILL_DIR = Path(__file__).parent
 DATA_DIR = Path.home() / ".claude" / "agent-hub"
 ENV_FILE = DATA_DIR / ".env"
 USAGE_FILE = DATA_DIR / "usage.json"
 
-# ── Provider config ────────────────────────────────────────────────────────────
+# -- Provider config (all FREE TIER limits, April 2026)
 PROVIDERS: Dict = {
-    "groq": {
-        "used_key": "requests_used",
-        "limit_key": "requests_limit",
-        "limit": 14400,
-        "reset_window": "daily",
-        "fallback": "gemini",
-        "model": "llama-3.3-70b-versatile",
+    "groq-fast": {
+        "label":       "Groq/Llama3.1-8B",
+        "model":       "llama-3.1-8b-instant",
+        "base_url":    "https://api.groq.com/openai/v1/chat/completions",
+        "env_key":     "GROQ_API_KEY",
+        "used_metric": "requests",
+        "limit":       14400,
+        "window":      "daily",
+        "fallback":    "cerebras",
+        "api_style":   "openai",
     },
-    "codex": {
-        "used_key": "requests_used",
-        "limit_key": "requests_limit",
-        "limit": 500,
-        "reset_window": "monthly",
-        "fallback": "groq",
-        "model": "gpt-4o-mini",
+    "groq-smart": {
+        "label":       "Groq/Llama4-Scout",
+        "model":       "meta-llama/llama-4-scout-17b-16e-instruct",
+        "base_url":    "https://api.groq.com/openai/v1/chat/completions",
+        "env_key":     "GROQ_API_KEY",
+        "used_metric": "requests",
+        "limit":       1000,
+        "window":      "daily",
+        "fallback":    "gemini-flash",
+        "api_style":   "openai",
     },
-    "gemini": {
-        "used_key": "tokens_used",
-        "limit_key": "tokens_limit",
-        "limit": 1000000,
-        "reset_window": "daily",
-        "fallback": "minimax",
-        "model": "gemini-1.5-flash",
+    "groq-creative": {
+        "label":       "Groq/Kimi-K2",
+        "model":       "moonshotai/kimi-k2-instruct",
+        "base_url":    "https://api.groq.com/openai/v1/chat/completions",
+        "env_key":     "GROQ_API_KEY",
+        "used_metric": "requests",
+        "limit":       1000,
+        "window":      "daily",
+        "fallback":    "gemini-lite",
+        "api_style":   "openai",
     },
-    "minimax": {
-        "used_key": "tokens_used",
-        "limit_key": "tokens_limit",
-        "limit": 1000000,
-        "reset_window": "monthly",
-        "fallback": "gemini",
-        "model": "abab6.5s-chat",
+    "cerebras": {
+        "label":       "Cerebras/Llama3.1-8B",
+        "model":       "llama3.1-8b",
+        "base_url":    "https://api.cerebras.ai/v1/chat/completions",
+        "env_key":     "CEREBRAS_API_KEY",
+        "used_metric": "tokens",
+        "limit":       1000000,
+        "window":      "daily",
+        "fallback":    "groq-fast",
+        "api_style":   "openai",
+    },
+    "gemini-flash": {
+        "label":       "Gemini/2.5-Flash",
+        "model":       "gemini-2.5-flash",
+        "base_url":    None,
+        "env_key":     "GEMINI_API_KEY",
+        "used_metric": "requests",
+        "limit":       250,
+        "window":      "daily",
+        "fallback":    "gemini-lite",
+        "api_style":   "gemini",
+    },
+    "gemini-lite": {
+        "label":       "Gemini/2.5-Flash-Lite",
+        "model":       "gemini-2.5-flash-lite",
+        "base_url":    None,
+        "env_key":     "GEMINI_API_KEY",
+        "used_metric": "requests",
+        "limit":       1000,
+        "window":      "daily",
+        "fallback":    "groq-fast",
+        "api_style":   "gemini",
+    },
+    "mistral-code": {
+        "label":       "Mistral/Codestral",
+        "model":       "codestral-latest",
+        "base_url":    "https://codestral.mistral.ai/v1/chat/completions",
+        "env_key":     "MISTRAL_API_KEY",
+        "used_metric": "tokens",
+        "limit":       4000000,
+        "window":      "monthly",
+        "fallback":    "groq-smart",
+        "api_style":   "openai",
     },
 }
 
 TASK_TO_PROVIDER: Dict[str, str] = {
-    "code": "codex",
-    "research": "gemini",
-    "creative": "minimax",
-    "fast": "groq",
-    "general": "groq",
+    "code":     "mistral-code",
+    "complex":  "groq-smart",
+    "research": "gemini-flash",
+    "bulk":     "gemini-lite",
+    "creative": "groq-creative",
+    "fast":     "cerebras",
+    "general":  "gemini-lite",
 }
 
-REQUIRED_ENV_KEYS = [
-    "GROQ_API_KEY",
-    "OPENAI_API_KEY",
-    "GEMINI_API_KEY",
-    "MINIMAX_API_KEY",
-    "MINIMAX_GROUP_ID",
-]
-
-FALLBACK_THRESHOLD = 0.10  # below 10% remaining → trigger fallback
+REQUIRED_ENV_KEYS = ["GROQ_API_KEY", "CEREBRAS_API_KEY", "GEMINI_API_KEY", "MISTRAL_API_KEY"]
+FALLBACK_THRESHOLD = 0.10
 
 
-# ── Usage state ────────────────────────────────────────────────────────────────
+# -- Usage state
 
 def _window_start(window: str) -> datetime:
-    """Return the UTC start of the current reset window."""
     now = datetime.now(timezone.utc)
     if window == "daily":
         return now.replace(hour=0, minute=0, second=0, microsecond=0)
@@ -85,39 +139,16 @@ def _window_start(window: str) -> datetime:
 
 
 def _init_usage() -> Dict:
-    """Return a fresh usage dict with all counters at zero."""
-    daily_start = _window_start("daily").isoformat()
-    monthly_start = _window_start("monthly").isoformat()
-    return {
-        "groq": {
-            "requests_used": 0,
-            "requests_limit": PROVIDERS["groq"]["limit"],
-            "reset_window": "daily",
-            "last_reset": daily_start,
-        },
-        "codex": {
-            "requests_used": 0,
-            "requests_limit": PROVIDERS["codex"]["limit"],
-            "reset_window": "monthly",
-            "last_reset": monthly_start,
-        },
-        "gemini": {
-            "tokens_used": 0,
-            "tokens_limit": PROVIDERS["gemini"]["limit"],
-            "reset_window": "daily",
-            "last_reset": daily_start,
-        },
-        "minimax": {
-            "tokens_used": 0,
-            "tokens_limit": PROVIDERS["minimax"]["limit"],
-            "reset_window": "monthly",
-            "last_reset": monthly_start,
-        },
-    }
+    result = {}
+    for name, cfg in PROVIDERS.items():
+        ws = _window_start(cfg["window"]).isoformat()
+        m = cfg["used_metric"]
+        result[name] = {f"{m}_used": 0, f"{m}_limit": cfg["limit"],
+                        "reset_window": cfg["window"], "last_reset": ws}
+    return result
 
 
 def _save_usage(data: Dict) -> None:
-    """Atomically write usage state to USAGE_FILE via a .tmp intermediate."""
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     tmp = USAGE_FILE.with_suffix(".tmp")
     try:
@@ -129,15 +160,17 @@ def _save_usage(data: Dict) -> None:
 
 
 def _auto_reset(data: Dict) -> Dict:
-    """Zero any provider whose reset window has elapsed. Saves if changed."""
     changed = False
     for name, cfg in PROVIDERS.items():
-        last_str = data[name]["last_reset"].replace("Z", "+00:00")
-        last = datetime.fromisoformat(last_str)
-        window_start = _window_start(cfg["reset_window"])
-        if last < window_start:
-            data[name][cfg["used_key"]] = 0
-            data[name]["last_reset"] = window_start.isoformat()
+        if name not in data:
+            data[name] = _init_usage()[name]; changed = True; continue
+        raw = data[name].get("last_reset", "1970-01-01T00:00:00+00:00")
+        last = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        ws = _window_start(cfg["window"])
+        if last < ws:
+            m = cfg["used_metric"]
+            data[name][f"{m}_used"] = 0
+            data[name]["last_reset"] = ws.isoformat()
             changed = True
     if changed:
         _save_usage(data)
@@ -145,74 +178,68 @@ def _auto_reset(data: Dict) -> Dict:
 
 
 def load_usage() -> Dict:
-    """Load usage.json. Reinitialize if missing or malformed. Apply auto-resets."""
     try:
         raw = USAGE_FILE.read_text()
         data = json.loads(raw)
         for name in PROVIDERS:
             if name not in data:
-                raise ValueError(f"missing provider: {name}")
+                raise ValueError(f"missing: {name}")
     except (FileNotFoundError, json.JSONDecodeError, ValueError):
-        data = _init_usage()
-        _save_usage(data)
+        data = _init_usage(); _save_usage(data)
     return _auto_reset(data)
 
 
 def increment_usage(data: Dict, provider: str, amount: int) -> Dict:
-    """Increment the usage counter for a provider and persist."""
     cfg = PROVIDERS[provider]
-    data[provider][cfg["used_key"]] += amount
+    key = f"{cfg['used_metric']}_used"
+    data[provider][key] += amount
     _save_usage(data)
     return data
 
 
-# ── Classification ─────────────────────────────────────────────────────────────
+# -- Classification
 
 def classify(task: str) -> str:
-    """Classify task text into one of 5 task types."""
     t = task.lower()
-    code_signals = [
-        "code", "function", "class", "debug", "refactor", "bug", "syntax",
+    complex_signals = ["architect", "design system", "refactor entire", "design pattern",
+        "system design", "explain the codebase", "multi-step", "step by step",
+        "walk me through", "performance optimization", "security audit"]
+    code_signals = ["code", "function", "class", "debug", "refactor", "bug", "syntax",
         "implement", "def ", "import ", "return ", "error:", "traceback",
-        "write a function", "fix this", "what's wrong with",
-    ]
-    research_signals = [
-        "explain", "summarize", "what is", "how does", "compare", "research",
-        "document", "overview", "describe", "analyze", "what are",
-    ]
-    creative_signals = [
-        "story", "creative", "dialogue", "character", "write a story",
-        "narrative", "poem", "fiction", "roleplay",
-    ]
-    fast_signals = [
-        "yes or no", "how many", "when was", "who is", "define ",
-        "what's the capital", "spell ", "quick question",
-    ]
+        "write a function", "fix this", "what's wrong with", "unit test",
+        "dockerfile", "bash script", "shell script"]
+    research_signals = ["explain", "summarize", "what is", "how does", "compare", "research",
+        "document", "overview", "describe", "analyze", "what are", "why does",
+        "pros and cons", "difference between"]
+    bulk_signals = ["for each", "batch", "list of", "all of these", "process each",
+        "every item", "in bulk", "multiple items", "iterate over"]
+    creative_signals = ["story", "creative", "dialogue", "character", "write a story",
+        "narrative", "poem", "fiction", "roleplay", "marketing copy", "blog post"]
+    fast_signals = ["yes or no", "how many", "when was", "who is", "define ",
+        "quick", "one word", "true or false", "convert ", "what time"]
+
+    for s in complex_signals:
+        if s in t: return "complex"
     for s in code_signals:
-        if s in t:
-            return "code"
+        if s in t: return "code"
+    for s in bulk_signals:
+        if s in t: return "bulk"
     for s in creative_signals:
-        if s in t:
-            return "creative"
+        if s in t: return "creative"
     for s in research_signals:
-        if s in t:
-            return "research"
+        if s in t: return "research"
     for s in fast_signals:
-        if s in t:
-            return "fast"
+        if s in t: return "fast"
     return "general"
 
 
-# ── Provider selection ─────────────────────────────────────────────────────────
+# -- Provider selection
 
 def _remaining_pct(data: Dict, provider: str) -> float:
-    """Return the fraction of budget remaining for a provider (0.0–1.0)."""
     cfg = PROVIDERS[provider]
-    used = data[provider][cfg["used_key"]]
-    limit = data[provider][cfg["limit_key"]]
-    if limit == 0:
-        return 0.0
-    return (limit - used) / limit
+    used = data[provider][f"{cfg['used_metric']}_used"]
+    limit = data[provider][f"{cfg['used_metric']}_limit"]
+    return max(0.0, (limit - used) / limit) if limit else 0.0
 
 
 def _is_available(data: Dict, provider: str) -> bool:
@@ -224,239 +251,142 @@ def _needs_fallback(data: Dict, provider: str) -> bool:
 
 
 def select_provider(data: Dict, task_type: str) -> Tuple[str, Optional[str]]:
-    """
-    Return (provider_to_use, warning_message).
-    warning_message is non-None when a fallback is triggered.
-    Raises SystemExit when both primary and fallback are exhausted.
-    """
     primary = TASK_TO_PROVIDER[task_type]
     fallback = PROVIDERS[primary]["fallback"]
 
     if _is_available(data, primary) and not _needs_fallback(data, primary):
         return primary, None
 
+    lp = PROVIDERS[primary]["label"]
+    lf = PROVIDERS[fallback]["label"]
+
     if not _is_available(data, primary):
         if _is_available(data, fallback):
-            msg = (
-                f"⚠ {primary.capitalize()} at limit — "
-                f"routing {task_type} task to {fallback.capitalize()}"
-            )
-            return fallback, msg
-        sys.exit(
-            f"[agent-hub] Hard stop: {primary} and {fallback} both exhausted. "
-            f"Reset with: python3 router.py reset {primary} && python3 router.py reset {fallback}"
-        )
+            return fallback, f"warning: {lp} exhausted -> {lf}"
+        sys.exit(f"[agent-hub] Hard stop: {primary} and {fallback} both exhausted.\n"
+                 f"Reset: python3 router.py reset {primary} && python3 router.py reset {fallback}")
 
-    # primary below threshold but not fully exhausted → use fallback preemptively
     pct = int(_remaining_pct(data, primary) * 100)
     if _is_available(data, fallback):
-        msg = (
-            f"⚠ {primary.capitalize()} at {pct}% remaining — "
-            f"routing {task_type} task to {fallback.capitalize()}"
-        )
-        return fallback, msg
-
-    # fallback also unavailable — stay on primary while it still has anything
-    return primary, f"⚠ {primary.capitalize()} at {pct}% remaining, {fallback} unavailable"
+        return fallback, f"warning: {lp} at {pct}% -> {lf}"
+    return primary, f"warning: {lp} at {pct}%, fallback {lf} unavailable"
 
 
-# ── Status bar ─────────────────────────────────────────────────────────────────
+# -- Status bar
 
-def _fmt_number(n: int) -> str:
-    if n >= 1_000_000:
-        return f"{n // 1_000_000}M"
-    if n >= 1_000:
-        return f"{n // 1_000}K"
+def _fmt(n: int) -> str:
+    if n >= 1_000_000: return f"{n/1_000_000:.1f}M"
+    if n >= 1_000: return f"{n//1_000}K"
     return str(n)
 
 
-def format_count(data: Dict, provider: str) -> str:
-    """Return 'used/limit' string for a provider.
-
-    The used value is abbreviated with K/M; the limit is abbreviated only
-    when it is an exact multiple of 1 000 000 (e.g. 1000000 → '1M'), and
-    kept as a raw integer otherwise (e.g. 14400 stays '14400').
-    """
-    cfg = PROVIDERS[provider]
-    used = data[provider][cfg["used_key"]]
-    limit = data[provider][cfg["limit_key"]]
-    # Abbreviate limit only when it is a clean million
-    if limit >= 1_000_000 and limit % 1_000_000 == 0:
-        limit_str = f"{limit // 1_000_000}M"
-    else:
-        limit_str = str(limit)
-    return f"{_fmt_number(used)}/{limit_str}"
-
-
 def _indicator(data: Dict, provider: str) -> str:
-    """Return ● (available) or ○ (exhausted) for a provider."""
-    pct = _remaining_pct(data, provider)
-    if pct <= 0:
-        return "○"
-    return "●"
+    return "●" if _remaining_pct(data, provider) > 0 else "○"
+
+
+def format_count(data: Dict, provider: str) -> str:
+    cfg = PROVIDERS[provider]
+    used = data[provider][f"{cfg['used_metric']}_used"]
+    limit = data[provider][f"{cfg['used_metric']}_limit"]
+    lstr = f"{limit//1_000_000}M" if limit >= 1_000_000 and limit % 1_000_000 == 0 else str(limit)
+    return f"{_fmt(used)}/{lstr}"
 
 
 def build_status_bar(data: Dict, active_provider: str, warning: Optional[str] = None) -> str:
-    """
-    Build the status bar string.
-    Normal: [PROVIDER ●] Groq: x/y · Codex: x/y · Gemini: x/y · Minimax: x/y
-    Fallback (abbreviated): [PROVIDER ●] ⚠ message · Provider: x/y
-    """
     ind = _indicator(data, active_provider)
-    prefix = f"[{active_provider.upper()} {ind}]"
-    fixed_order = ["groq", "codex", "gemini", "minimax"]
-
+    label = PROVIDERS[active_provider]["label"]
+    prefix = f"[{label} {ind}]"
     if warning:
-        return f"{prefix} {warning} · {active_provider.capitalize()}: {format_count(data, active_provider)}"
+        return f"{prefix} {warning} | Used: {format_count(data, active_provider)}"
+    order = ["groq-fast","groq-smart","groq-creative","cerebras","gemini-flash","gemini-lite","mistral-code"]
+    short = {"groq-fast":"G/fast","groq-smart":"G/smart","groq-creative":"G/kimi",
+             "cerebras":"Cbr","gemini-flash":"Gem/flash","gemini-lite":"Gem/lite","mistral-code":"Mis/code"}
+    parts = [f"{short[p]}{_indicator(data,p)}:{format_count(data,p)}" for p in order]
+    return f"{prefix}  " + "  ".join(parts)
 
-    counts = " · ".join(
-        f"{p.capitalize()}: {format_count(data, p)}" for p in fixed_order
-    )
-    return f"{prefix} {counts}"
 
-
-# ── API calls ──────────────────────────────────────────────────────────────────
+# -- API calls
 
 def _ensure_env() -> None:
-    """Load .env file once. Safe to call multiple times — python-dotenv skips if already loaded."""
     load_dotenv(ENV_FILE)
 
 
-def call_groq(task: str) -> Tuple[str, int]:
-    """Call Groq llama-3.3-70b-versatile. Returns (response_text, request_count=1)."""
+def _call_openai_style(provider: str, task: str) -> Tuple[str, int]:
     _ensure_env()
-    key = os.environ.get("GROQ_API_KEY", "")
+    cfg = PROVIDERS[provider]
+    key = os.environ.get(cfg["env_key"], "")
     if not key:
-        raise ValueError("GROQ_API_KEY not set")
+        raise ValueError(f"{cfg['env_key']} not set")
     resp = requests.post(
-        "https://api.groq.com/openai/v1/chat/completions",
-        headers={"Authorization": f"Bearer {key}"},
-        json={"model": "llama-3.3-70b-versatile",
-              "messages": [{"role": "user", "content": task}]},
-        timeout=30,
-    )
-    resp.raise_for_status()
-    return resp.json()["choices"][0]["message"]["content"], 1
-
-
-def call_codex(task: str) -> Tuple[str, int]:
-    """Call OpenAI gpt-4o-mini. Returns (response_text, request_count=1)."""
-    _ensure_env()
-    key = os.environ.get("OPENAI_API_KEY", "")
-    if not key:
-        raise ValueError("OPENAI_API_KEY not set")
-    resp = requests.post(
-        "https://api.openai.com/v1/chat/completions",
-        headers={"Authorization": f"Bearer {key}"},
-        json={"model": "gpt-4o-mini",
-              "messages": [{"role": "user", "content": task}]},
-        timeout=30,
-    )
-    resp.raise_for_status()
-    return resp.json()["choices"][0]["message"]["content"], 1
-
-
-def call_gemini(task: str) -> Tuple[str, int]:
-    """Call Gemini 1.5 Flash. Returns (response_text, total_tokens)."""
-    _ensure_env()
-    key = os.environ.get("GEMINI_API_KEY", "")
-    if not key:
-        raise ValueError("GEMINI_API_KEY not set")
-    resp = requests.post(
-        f"https://generativelanguage.googleapis.com/v1beta/models/"
-        f"gemini-1.5-flash:generateContent?key={key}",  # Gemini requires key in URL, not header
-        json={"contents": [{"parts": [{"text": task}]}]},
-        timeout=30,
-    )
-    resp.raise_for_status()
-    data = resp.json()
-    text = data["candidates"][0]["content"]["parts"][0]["text"]
-    tokens = data.get("usageMetadata", {}).get("totalTokenCount", 0)
-    return text, tokens
-
-
-def call_minimax(task: str) -> Tuple[str, int]:
-    """Call MiniMax abab6.5s-chat. Returns (response_text, total_tokens)."""
-    _ensure_env()
-    key = os.environ.get("MINIMAX_API_KEY", "")
-    group_id = os.environ.get("MINIMAX_GROUP_ID", "")
-    if not key:
-        raise ValueError("MINIMAX_API_KEY not set")
-    if not group_id:
-        raise ValueError("MINIMAX_GROUP_ID not set")
-    resp = requests.post(
-        "https://api.minimax.chat/v1/text/chatcompletion_v2",
-        headers={"Authorization": f"Bearer {key}"},
-        json={
-            "model": "abab6.5s-chat",
-            "messages": [{"role": "user", "content": task}],
-            "GroupId": group_id,
-        },
-        timeout=30,
+        cfg["base_url"],
+        headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+        json={"model": cfg["model"], "messages": [{"role": "user", "content": task}]},
+        timeout=60,
     )
     resp.raise_for_status()
     data = resp.json()
     text = data["choices"][0]["message"]["content"]
-    tokens = data.get("usage", {}).get("total_tokens", 0)
-    return text, tokens
+    if PROVIDERS[provider]["used_metric"] == "tokens":
+        tokens = data.get("usage", {}).get("total_tokens", 0)
+        return text, tokens
+    return text, 1
 
 
-CALL_MAP: Dict = {
-    "groq": call_groq,
-    "codex": call_codex,
-    "gemini": call_gemini,
-    "minimax": call_minimax,
-}
+def _call_gemini(provider: str, task: str) -> Tuple[str, int]:
+    _ensure_env()
+    key = os.environ.get("GEMINI_API_KEY", "")
+    if not key:
+        raise ValueError("GEMINI_API_KEY not set")
+    model = PROVIDERS[provider]["model"]
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={key}"
+    resp = requests.post(url, json={"contents": [{"parts": [{"text": task}]}]}, timeout=60)
+    resp.raise_for_status()
+    data = resp.json()
+    text = data["candidates"][0]["content"]["parts"][0]["text"]
+    return text, 1
+
+
+def _dispatch(provider: str, task: str) -> Tuple[str, int]:
+    if PROVIDERS[provider]["api_style"] == "gemini":
+        return _call_gemini(provider, task)
+    return _call_openai_style(provider, task)
 
 
 def call_with_retry(provider: str, task: str) -> Tuple[str, int]:
-    """Call provider with one retry after 1s backoff on transient failures.
-
-    Config errors (ValueError for missing keys) propagate immediately.
-    Network/HTTP errors (requests.exceptions.RequestException) are retried once.
-    """
-    fn = CALL_MAP[provider]
     try:
-        return fn(task)
+        return _dispatch(provider, task)
     except requests.exceptions.RequestException:
-        time.sleep(1)
-        return fn(task)
+        time.sleep(2)
+        return _dispatch(provider, task)
 
 
-# ── CLI commands ───────────────────────────────────────────────────────────────
+# -- CLI
 
 def cmd_route(args: argparse.Namespace) -> None:
-    """Route a task: classify → select provider → call → track usage → print response."""
     task = args.task
     task_type = args.type if args.type else classify(task)
-
     data = load_usage()
     provider, warning = select_provider(data, task_type)
-
     try:
         response, increment = call_with_retry(provider, task)
     except ValueError as e:
-        # Config error (missing API key) — warn and try fallback
-        fallback = PROVIDERS[provider]["fallback"]
-        print(f"[agent-hub] {provider.capitalize()} key error: {e}. Trying {fallback}...", file=sys.stderr)
+        fb = PROVIDERS[provider]["fallback"]
+        print(f"[agent-hub] Key error ({provider}): {e}. Trying {fb}...", file=sys.stderr)
         try:
-            response, increment = call_with_retry(fallback, task)
-            warning = f"⚠ {provider.capitalize()} key missing — used {fallback.capitalize()} instead"
-            provider = fallback
+            response, increment = call_with_retry(fb, task)
+            warning = f"warning: {PROVIDERS[provider]['label']} key missing -> {PROVIDERS[fb]['label']}"
+            provider = fb
         except Exception as e2:
-            print(f"[agent-hub] Both {provider} and {fallback} failed: {e2}", file=sys.stderr)
-            sys.exit(1)
+            print(f"[agent-hub] Both failed: {e2}", file=sys.stderr); sys.exit(1)
     except requests.exceptions.RequestException as e:
-        # Network/HTTP error — fallback was already attempted by call_with_retry, try next provider
-        fallback = PROVIDERS[provider]["fallback"]
+        fb = PROVIDERS[provider]["fallback"]
+        print(f"[agent-hub] Network error ({provider}): {e}. Trying {fb}...", file=sys.stderr)
         try:
-            response, increment = call_with_retry(fallback, task)
-            warning = f"⚠ {provider.capitalize()} failed — used {fallback.capitalize()} instead"
-            provider = fallback
+            response, increment = call_with_retry(fb, task)
+            warning = f"warning: {PROVIDERS[provider]['label']} network error -> {PROVIDERS[fb]['label']}"
+            provider = fb
         except Exception as e2:
-            print(f"[agent-hub] Both {provider} and {fallback} failed: {e2}", file=sys.stderr)
-            sys.exit(1)
-
+            print(f"[agent-hub] Both failed: {e2}", file=sys.stderr); sys.exit(1)
     data = increment_usage(data, provider, increment)
     bar = build_status_bar(data, provider, warning)
     print(bar, file=sys.stderr)
@@ -464,79 +394,77 @@ def cmd_route(args: argparse.Namespace) -> None:
 
 
 def cmd_status(args: argparse.Namespace) -> None:
-    """Print current token usage across all providers."""
     data = load_usage()
-    print("[agent-hub] Token Usage")
-    for p in ["groq", "codex", "gemini", "minimax"]:
-        ind = _indicator(data, p)
-        print(f"  {p.capitalize()}: {format_count(data, p)} {ind}")
+    print("[agent-hub] Free-Tier Usage  (Claude Code Pro covers orchestration; all below is free)")
+    print()
+    groups = [
+        ("Groq (no CC)",     ["groq-fast", "groq-smart", "groq-creative"]),
+        ("Cerebras (no CC)", ["cerebras"]),
+        ("Google (no CC)",   ["gemini-flash", "gemini-lite"]),
+        ("Mistral (no CC)",  ["mistral-code"]),
+    ]
+    for gname, providers in groups:
+        print(f"  {gname}")
+        for p in providers:
+            cfg = PROVIDERS[p]
+            ind = _indicator(data, p)
+            pct = int(_remaining_pct(data, p) * 100)
+            print(f"    {cfg['label']:<30} {format_count(data, p):>14}  {ind} {pct}% remaining")
+        print()
 
 
 def cmd_reset(args: argparse.Namespace) -> None:
-    """Reset a provider's usage counter to zero."""
-    provider = args.provider
+    p = args.provider
+    if p not in PROVIDERS:
+        print(f"[agent-hub] Unknown: {p}. Options: {', '.join(PROVIDERS)}", file=sys.stderr); sys.exit(1)
     data = load_usage()
-    cfg = PROVIDERS[provider]
-    data[provider][cfg["used_key"]] = 0
-    data[provider]["last_reset"] = datetime.now(timezone.utc).isoformat()
+    cfg = PROVIDERS[p]; m = cfg["used_metric"]
+    data[p][f"{m}_used"] = 0
+    data[p]["last_reset"] = _window_start(cfg["window"]).isoformat()
     _save_usage(data)
-    print(f"[agent-hub] Reset {provider} usage to 0")
+    print(f"[agent-hub] Reset {p}.")
 
 
 def cmd_set_key(args: argparse.Namespace) -> None:
-    """Write an API key to ~/.claude/agent-hub/.env."""
+    pmap = {"groq": "GROQ_API_KEY", "cerebras": "CEREBRAS_API_KEY",
+            "gemini": "GEMINI_API_KEY", "mistral": "MISTRAL_API_KEY"}
+    if args.provider not in pmap:
+        print(f"[agent-hub] Unknown: {args.provider}. Options: {', '.join(pmap)}", file=sys.stderr); sys.exit(1)
+    env_key = pmap[args.provider]
     DATA_DIR.mkdir(parents=True, exist_ok=True)
-    KEY_MAP = {
-        "groq": "GROQ_API_KEY",
-        "codex": "OPENAI_API_KEY",
-        "gemini": "GEMINI_API_KEY",
-        "minimax": "MINIMAX_API_KEY",
-        "minimax-group-id": "MINIMAX_GROUP_ID",
-    }
-    env_key = KEY_MAP.get(args.key_name)
-    if not env_key:
-        print(f"[agent-hub] Unknown key name: {args.key_name}. Valid: {', '.join(KEY_MAP)}")
-        sys.exit(1)
-
-    existing: Dict[str, str] = {}
-    if ENV_FILE.exists():
-        for line in ENV_FILE.read_text().splitlines():
-            if "=" in line and not line.startswith("#"):
-                k, _, v = line.partition("=")
-                existing[k.strip()] = v.strip()
-
-    existing[env_key] = args.key_value.strip()
-    ENV_FILE.write_text("\n".join(f"{k}={v}" for k, v in existing.items()) + "\n")
+    lines = [l for l in (ENV_FILE.read_text().splitlines() if ENV_FILE.exists() else [])
+             if not l.startswith(f"{env_key}=")]
+    lines.append(f"{env_key}={args.value}")
+    ENV_FILE.write_text("\n".join(lines) + "\n")
     ENV_FILE.chmod(0o600)
-    print(f"[agent-hub] Set {env_key} in {ENV_FILE}")
+    print(f"[agent-hub] Set {env_key}.")
 
 
-# ── Entry point ────────────────────────────────────────────────────────────────
+def cmd_classify(args: argparse.Namespace) -> None:
+    t = classify(args.task)
+    p = TASK_TO_PROVIDER[t]
+    print(f"type={t}  provider={p}  model={PROVIDERS[p]['model']}")
+
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="agent-hub router")
+    parser = argparse.ArgumentParser(prog="router.py",
+                                     description="agent-hub: free-tier AI router for Claude Code Pro")
     sub = parser.add_subparsers(dest="command", required=True)
 
-    p_route = sub.add_parser("route", help="Route a task to the best provider")
-    p_route.add_argument("task", help="The task text to route")
-    p_route.add_argument(
-        "--type",
-        choices=["code", "research", "creative", "fast", "general"],
-        help="Override automatic task classification",
-    )
-    p_route.set_defaults(func=cmd_route)
+    p = sub.add_parser("route"); p.add_argument("task")
+    p.add_argument("--type", choices=list(TASK_TO_PROVIDER), default=None)
+    p.set_defaults(func=cmd_route)
 
-    p_status = sub.add_parser("status", help="Show current token usage")
-    p_status.set_defaults(func=cmd_status)
+    p = sub.add_parser("status"); p.set_defaults(func=cmd_status)
 
-    p_reset = sub.add_parser("reset", help="Manually reset a provider counter")
-    p_reset.add_argument("provider", choices=list(PROVIDERS))
-    p_reset.set_defaults(func=cmd_reset)
+    p = sub.add_parser("reset"); p.add_argument("provider", choices=list(PROVIDERS))
+    p.set_defaults(func=cmd_reset)
 
-    p_set_key = sub.add_parser("set-key", help="Store an API key in ~/.claude/agent-hub/.env")
-    p_set_key.add_argument("key_name", help="groq | codex | gemini | minimax | minimax-group-id")
-    p_set_key.add_argument("key_value", help="The key value")
-    p_set_key.set_defaults(func=cmd_set_key)
+    p = sub.add_parser("set-key")
+    p.add_argument("provider", choices=["groq","cerebras","gemini","mistral"])
+    p.add_argument("value"); p.set_defaults(func=cmd_set_key)
+
+    p = sub.add_parser("classify"); p.add_argument("task"); p.set_defaults(func=cmd_classify)
 
     args = parser.parse_args()
     args.func(args)
