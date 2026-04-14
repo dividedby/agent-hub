@@ -11,7 +11,7 @@
         ]
       }
     ],
-    "ContextCompaction": [
+    "PreCompact": [
       {
         "hooks": [
           {
