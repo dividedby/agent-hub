@@ -1,10 +1,9 @@
 {
   "name": "agent-hub",
   "displayName": "Agent Hub",
-  "version": "3.0.1",
+  "version": "3.0.2",
   "description": "Routes tasks to best free models to preserve Claude Code Pro token budget",
   "homepage": "https://github.com/dividedby/agent-hub",
   "category": "productivity",
-  "skills": ["./skills/agent-hub"],
   "hooks": "./hooks/hooks.json"
 }
