@@ -127,6 +127,16 @@ TASK_TO_PROVIDER: Dict[str, str] = {
 
 REQUIRED_ENV_KEYS = ["GROQ_API_KEY", "CEREBRAS_API_KEY", "GEMINI_API_KEY", "MISTRAL_API_KEY"]
 FALLBACK_THRESHOLD = 0.10
+MISTRAL_MIN_INTERVAL = 31.0  # 2 RPM free tier = 30s between calls + 1s buffer
+
+_last_mistral_call: float = 0.0
+
+
+def _enforce_mistral_rpm() -> None:
+    """Block until at least 31s have elapsed since the last Mistral call."""
+    elapsed = time.time() - _last_mistral_call
+    if elapsed < MISTRAL_MIN_INTERVAL:
+        time.sleep(MISTRAL_MIN_INTERVAL - elapsed)
 
 
 # -- Usage state
@@ -347,9 +357,15 @@ def _call_gemini(provider: str, task: str) -> Tuple[str, int]:
 
 
 def _dispatch(provider: str, task: str) -> Tuple[str, int]:
+    global _last_mistral_call
+    if provider == "mistral-code":
+        _enforce_mistral_rpm()
     if PROVIDERS[provider]["api_style"] == "gemini":
         return _call_gemini(provider, task)
-    return _call_openai_style(provider, task)
+    result = _call_openai_style(provider, task)
+    if provider == "mistral-code":
+        _last_mistral_call = time.time()
+    return result
 
 
 def call_with_retry(provider: str, task: str) -> Tuple[str, int]:
