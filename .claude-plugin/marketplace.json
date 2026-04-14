@@ -1,17 +1,13 @@
 {
   "name": "dividedby-agent-hub",
   "owner": {
-    "name": "dividedby",
-    "email": ""
-  },
-  "metadata": {
-    "description": "Smart AI router for Claude Code Pro — routes tasks to best free models to preserve Claude token budget"
+    "name": "dividedby"
   },
   "plugins": [
     {
       "name": "agent-hub",
-      "source": ".",
-      "description": "Routes tasks to best free models (Groq, Cerebras, Gemini, Mistral) based on task type and rate limit budgets",
+      "source": "./",
+      "description": "Routes tasks to best free models to preserve Claude Code Pro token budget",
       "version": "3.0.0",
       "author": { "name": "dividedby" }
     }
