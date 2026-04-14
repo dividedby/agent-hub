@@ -3,7 +3,7 @@
 # Runs when a new Claude Code session begins.
 # stdout from SessionStart becomes part of Claude's initial context.
 
-ROUTER="$HOME/.claude/plugins/cache/claude-plugins-official/superpowers/5.0.5/skills/agent-hub/router.py"
+ROUTER="${CLAUDE_PLUGIN_ROOT}/scripts/router.py"
 
 if [ ! -f "$ROUTER" ]; then
   echo "[agent-hub] WARNING: router.py not found at $ROUTER — skill not active"
