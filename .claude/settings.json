@@ -5,7 +5,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "$HOME/.claude/plugins/cache/claude-plugins-official/superpowers/5.0.5/skills/agent-hub/hooks/session-start-router.sh"
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/session-start-router.sh"
           }
         ]
       }
@@ -16,7 +16,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "$HOME/.claude/plugins/cache/claude-plugins-official/superpowers/5.0.5/skills/agent-hub/hooks/post-tool-log.sh"
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/post-tool-log.sh"
           }
         ]
       }
