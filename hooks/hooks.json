@@ -1,0 +1,23 @@
+{
+  "SessionStart": [
+    {
+      "hooks": [
+        {
+          "type": "command",
+          "command": "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/router.py status --json",
+          "timeout": 10
+        }
+      ]
+    }
+  ],
+  "ContextCompaction": [
+    {
+      "hooks": [
+        {
+          "type": "prompt",
+          "command": "cat ${CLAUDE_PLUGIN_ROOT}/skills/agent-hub/SKILL.md"
+        }
+      ]
+    }
+  ]
+}
