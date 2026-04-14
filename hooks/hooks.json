@@ -15,7 +15,7 @@
       {
         "hooks": [
           {
-            "type": "prompt",
+            "type": "command",
             "command": "cat ${CLAUDE_PLUGIN_ROOT}/skills/agent-hub/SKILL.md"
           }
         ]

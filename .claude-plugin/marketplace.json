@@ -8,7 +8,7 @@
       "name": "agent-hub",
       "source": "./",
       "description": "Routes tasks to best free models to preserve Claude Code Pro token budget",
-      "version": "3.0.2",
+      "version": "3.0.3",
       "author": { "name": "dividedby" }
     }
   ]
