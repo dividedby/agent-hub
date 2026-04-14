@@ -17,7 +17,7 @@ your reasoning and orchestration. All external calls go to free-tier endpoints.
 ## Constants
 
 ```bash
-ROUTER="$HOME/.claude/plugins/cache/claude-plugins-official/superpowers/5.0.5/skills/agent-hub/router.py"
+ROUTER="${CLAUDE_PLUGIN_ROOT}/scripts/router.py"
 ```
 
 Define `ROUTER` at the top of **every** bash block — shell variables do not persist
@@ -30,7 +30,7 @@ between separate Bash tool calls.
 **Step 1 — Verify router.py:**
 
 ```bash
-ROUTER="$HOME/.claude/plugins/cache/claude-plugins-official/superpowers/5.0.5/skills/agent-hub/router.py"
+ROUTER="${CLAUDE_PLUGIN_ROOT}/scripts/router.py"
 python3 "$ROUTER" status || echo "ERROR: router.py not found — reinstall"
 ```
 
@@ -51,7 +51,7 @@ print('MISSING:', ', '.join(missing)) if missing else print('ALL KEYS PRESENT')
 For any MISSING key, prompt the user and run:
 
 ```bash
-ROUTER="$HOME/.claude/plugins/cache/claude-plugins-official/superpowers/5.0.5/skills/agent-hub/router.py"
+ROUTER="${CLAUDE_PLUGIN_ROOT}/scripts/router.py"
 python3 "$ROUTER" set-key <provider> <api_key>
 # provider: groq | cerebras | gemini | mistral
 ```
@@ -59,7 +59,7 @@ python3 "$ROUTER" set-key <provider> <api_key>
 **Step 3 — Show usage:**
 
 ```bash
-ROUTER="$HOME/.claude/plugins/cache/claude-plugins-official/superpowers/5.0.5/skills/agent-hub/router.py"
+ROUTER="${CLAUDE_PLUGIN_ROOT}/scripts/router.py"
 python3 "$ROUTER" status
 ```
 
@@ -84,7 +84,7 @@ Use the **first** match in table order.
 **Step 2 — Route:**
 
 ```bash
-ROUTER="$HOME/.claude/plugins/cache/claude-plugins-official/superpowers/5.0.5/skills/agent-hub/router.py"
+ROUTER="${CLAUDE_PLUGIN_ROOT}/scripts/router.py"
 python3 "$ROUTER" route "<task>" --type <task_type> 2>/tmp/agent-hub-status.txt
 ```
 
